@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+  <head>
+    <meta charset="utf-8">
+    <title>Streaming an arraybuffer POC</title>
+    <link rel="stylesheet" href="milligram.min.css">
+  </head>
+  <body>
+    <header>
+      <h1>Streaming an <code>arraybuffer</code></h1>
+      <p>
+        This is a proof of concept of streaming an <code>arraybuffer</code>
+        from the server to the browser, which works cross-browser (thanks to
+        <a href="https://www.npmjs.com/package/stream-http">stream-http</a>).
+      </p>
+      <main>
+        <form>
+          <fieldset>
+            <label for="filename">File:</label>
+            <div style="display: flex; justify-content: space-between;">
+              <input type="text" id="file" value="" placeholder="Choose a file here" style="margin-right: 1rem;" list="sample-files-paths">
+              <button type="submit" id="fetch">Fetch</button>
+              <datalist id="sample-files-paths">
+                <option value="data/sample_image.nii.gz">sample_image.nii.gz (compressed, 1.5 MB)</option>
+                <option value="data/mni152_2009_256.nii.gz">mni152_2009_256.nii.gz (compressed, 1.5 MB)</option>
+              </datalist>
+            </div>
+          </fieldset>
+          <fieldset>
+            <label for="progress">
+              Progress: <output id="progress"></output>
+            </label>
+          </fieldset>
+          <fieldset>
+            <label for="logging">Log:</label>
+            <pre id="logging"></pre>
+          </fieldset>
+        </form>
+      </main>
+    </header>
+    <script src="public/bundle.js" charset="utf-8"></script>
+  </body>
+</html>
