@@ -6,7 +6,7 @@ const logger = new Logger('#logging');
 function noop() {
 }
 
-function request(filename, progressCallback = noop, dataCallback = noop) {
+function request(filename, progressCallback = noop, dataCallback = noop, done = noop) {
   logger.info(`Starting request to '${filename}'`);
   const request = http.get(filename, (response) => {
 
@@ -17,10 +17,12 @@ function request(filename, progressCallback = noop, dataCallback = noop) {
       logger.info(`Downloaded a chunk of size ${chunk.length} bytes`);
       bytesRead += chunk.length;
       progressCallback(bytesRead / contentLength);
+      dataCallback(chunk);
     });
 
     response.on('end', () => {
       logger.info('Response finished downloading.');
+      done();
     });
   });
 
