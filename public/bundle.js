@@ -17279,9 +17279,8 @@ formEl.addEventListener('submit', function (e) {
 
   function done() {
     inflator.push([], true);
-    // console.log('File data buffer bytes: ', imageDataBuffer.byteLength);
-    console.log('Total of bytes *compressed*: ', totalBytesRead.toLocaleString());
-    console.log('Total of bytes *uncompressed*: ', totalDecompressedBytesRead.toLocaleString());
+    logger.info('Total of bytes *compressed*: ' + totalBytesRead.toLocaleString());
+    logger.info('Total of bytes *decompressed*: ' + totalDecompressedBytesRead.toLocaleString());
   }
 });
 
