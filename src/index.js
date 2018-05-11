@@ -1,8 +1,14 @@
-import request from './request.js';
+import request from './request';
 import niftiReader from 'nifti-reader-js';
-import { HTMLLogger as Logger } from './log'
-import growBuffer from './growBuffer.js';
+import { HTMLLogger as Logger } from './log';
+import growBuffer from './growBuffer';
 import pako from 'pako';
+import { parseNiftiHeader } from './parseNiftiHeader';
+import { consumeImageData, getSliceK } from './consumeImageData';
+import ImageId from './ImageId';
+import MatrixIterator from './MatrixIterator';
+import * as cornerstone from 'cornerstone-core';
+import createDummyImageLoader from './dummyImageLoader';
 
 const logger = new Logger('#logging');
 const formEl = document.querySelector('form');
@@ -10,37 +16,25 @@ const fileEl = formEl.querySelector('#file');
 const progressEl = formEl.querySelector('#progress');
 
 
-const states = Object.freeze({
-  BEFORE_START: Symbol('before start'),
-  HEADER_RECEIVED: Symbol('header received'),
-  HEADER_PARSED: Symbol('header parsed'),
-  RECEIVING_IMAGE_DATA: Symbol('receiving image data'),
-  FINISHED: Symbol('finished'),
-  ERROR: Symbol('error')
-});
-
-
 formEl.addEventListener('submit', (e) => {
   e.preventDefault();
 
-  let state = states.BEFORE_START;
   let isCompressed = false;
   let totalBytesRead = 0;
   let totalDecompressedBytesRead = 0;
-  let compressedFirstDataBuffer = null;
-  let firstDataBufferUncompressedLength = 0;
-  let headerDataBuffer = null;
-  let imageDataBuffer = null;
   let accumulationRawBuffer = null;
   let stillReceivingHeader = true;
-  let inflator = new pako.Inflate();
+  const inflator = new pako.Inflate();
   let parsedHeader = null;
   let decompressedHeaderRemainderBuffer = null;
+  let matrixIterator = null;
+
 
   request(fileEl.value, reportProgress, chunkReceived, done);
 
-  function chunkReceived(chunk) {
+  function chunkReceived (chunk) {
     const HEADER_LENGTH = niftiReader.NIFTI1.STANDARD_HEADER_SIZE;
+
     totalBytesRead += chunk.buffer.byteLength;
 
     if (stillReceivingHeader) {
@@ -53,8 +47,8 @@ formEl.addEventListener('submit', (e) => {
         isCompressed = niftiReader.isCompressed(accumulationRawBuffer);
 
         let headerBytes = accumulationRawBuffer;
+
         if (isCompressed) {
-          // headerBytes = pako.inflate(headerBytes);
           inflator.push(headerBytes, pako.Z_SYNC_FLUSH);
           headerBytes = inflator.result.buffer;
         }
@@ -63,7 +57,10 @@ formEl.addEventListener('submit', (e) => {
         headerBytes = headerBytes.slice(0, HEADER_LENGTH);
 
         // parse the header using nifti-reader-js
-        parsedHeader = niftiReader.readHeader(headerBytes);
+        parsedHeader = parseNiftiHeader(headerBytes);
+        console.dir(parsedHeader);
+        matrixIterator = new MatrixIterator(parsedHeader.voxelLength);
+
         totalDecompressedBytesRead += HEADER_LENGTH;
       }
     }
@@ -80,80 +77,31 @@ formEl.addEventListener('submit', (e) => {
 
 
       // do whatever has to be done with this new data
-      //
+      consumeImageData(chunk, parsedHeader, matrixIterator);
+
+
+      // just grabs the first axial slice, supposing the initial chunk was
+      // big enough to hold all of its pixels
+      // this is just a temporary, for an initial demo purpose
+      if (!window.hasPrintedSlice0) {
+        const imageIdObject = ImageId.fromURL(`nifti:${fileEl.value}`);
+        const slice0 = getSliceK(parsedHeader, imageIdObject.slice.index);
+
+        createDummyImageLoader(imageIdObject.url, parsedHeader, slice0);
+        const element = document.querySelector('#cornerstone-image');
+
+        cornerstone.enable(element);
+        cornerstone.loadImage(imageIdObject.url).then((image) => {
+          cornerstone.displayImage(element, image);
+        });
+        window.hasPrintedSlice0 = true;
+      }
 
       totalDecompressedBytesRead += chunk.byteLength;
     }
   }
 
-
-  function changeState (newState) {
-    state = newState;
-    logger.info(`Changed state to '${newState.toString()}'`);
-  }
-
-  function chunkReceived2 (chunk) {
-    let isFirstChunkWithImageData = false;
-
-    totalBytesRead += chunk.length;
-
-    switch (state) {
-      case states.BEFORE_START:
-        headerDataBuffer = growBuffer(headerDataBuffer, chunk);
-
-        // check if the chunk has a size big enough to hold the NIfTI header
-        // which can be compressed or not
-        if (totalBytesRead >= niftiReader.NIFTI1.STANDARD_HEADER_SIZE) {
-          isFirstChunkWithImageData = true;
-          // conditionally decompress
-          if (niftiReader.isCompressed(headerDataBuffer)) {
-            isCompressed = true;
-            inflator.push(chunk, pako.Z_SYNC_FLUSH);
-            changeState(states.HEADER_RECEIVED);
-            headerDataBuffer = inflator.result.buffer;
-
-            totalDecompressedBytesRead += headerDataBuffer.byteLength;
-          }
-
-          // move the extra bytes from the header buffer to the data buffer (already decompressed)
-          const imageDataBuffer = headerDataBuffer.slice(niftiReader.NIFTI1.STANDARD_HEADER_SIZE);
-          headerDataBuffer = headerDataBuffer.slice(0, niftiReader.NIFTI1.STANDARD_HEADER_SIZE);
-
-
-          // parse the header
-          header = niftiReader.readHeader(headerDataBuffer);
-
-          // change the state to header parsed, then to receiving image data
-          changeState(states.HEADER_PARSED);
-          changeState(states.RECEIVING_IMAGE_DATA);
-
-          chunk = imageDataBuffer;
-        } else {
-          break;
-        }
-
-      case states.RECEIVING_IMAGE_DATA:
-        // if it is compressed, decompress the chunk
-        if (isCompressed && !isFirstChunkWithImageData) {
-          inflator.push(chunk, pako.Z_SYNC_FLUSH);
-          chunk = inflator.result//.slice(totalDecompressedBytesRead);
-        }
-
-        if (!isFirstChunkWithImageData) {
-          totalDecompressedBytesRead += chunk.buffer.byteLength;
-        }
-
-
-        // add the chunk to the image data buffer
-        imageDataBuffer = growBuffer(imageDataBuffer, chunk);
-
-      default:
-
-    }
-
-  }
-
-  function done() {
+  function done () {
     inflator.push([], true);
     logger.info(`Total of bytes *compressed*: ${totalBytesRead.toLocaleString()}`);
     logger.info(`Total of bytes *decompressed*: ${totalDecompressedBytesRead.toLocaleString()}`);
@@ -163,5 +111,6 @@ formEl.addEventListener('submit', (e) => {
 
 function reportProgress (percentageConcluded) {
   const percentage = 100 * percentageConcluded;
+
   progressEl.innerHTML = `${percentage.toFixed(0)}%`;
 }

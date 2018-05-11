@@ -1,0 +1,18 @@
+#cornerstone-image {
+  margin-left: 1em;
+  float: right;
+}
+#cornerstone-image:empty {
+  outline: 1px silver dashed;
+}
+
+#cornerstone-image:empty::before {
+  content: attr(data-empty);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100%;
+  font-family: monospace;
+  font-size: 75%;
+  opacity: 0.75;
+}
