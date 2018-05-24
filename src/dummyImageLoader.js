@@ -1,11 +1,8 @@
 import * as cornerstone from 'cornerstone-core';
 
-function createDummyImageLoader (imageId, header, imageData) {
+function createDummyImageLoader (imageId, header, imageData, width, height) {
 
   function getExampleImage (imageId) {
-    const width = header.voxelLength[0];
-    const height = header.voxelLength[1];
-
 
     const image = {
       imageId,

@@ -17316,10 +17316,7 @@ Object.defineProperty(exports, "__esModule", {
   value: true
 });
 exports.consumeImageData = consumeImageData;
-exports.getSliceK = getSliceK;
-exports.getSliceJ = getSliceJ;
-exports.getSliceI = getSliceI;
-exports.getSliceZ = getSliceZ;
+exports.getSlice = getSlice;
 
 var _cornerstoneMath = __webpack_require__(/*! cornerstone-math */ "./node_modules/cornerstone-math/dist/cornerstoneMath.min.js");
 
@@ -17339,6 +17336,7 @@ var voxels = [];
 
 function createVoxel(i, j, k, matrix, value) {
   var position = new _cornerstoneMath.Vector3(i, j, k);
+
   position.applyMatrix4(matrix);
 
   return new Voxel(position, i, j, k, value);
@@ -17346,6 +17344,17 @@ function createVoxel(i, j, k, matrix, value) {
 
 function consumeImageData(chunk, header, iterator) {
   var TypedArrayConstructor = header.dataType.TypedArrayConstructor;
+  var remainderBytes = null;
+
+  if (TypedArrayConstructor.BYTES_PER_ELEMENT !== 1) {
+    var bytesOverflowing = chunk.byteLength % TypedArrayConstructor.BYTES_PER_ELEMENT;
+
+    if (bytesOverflowing > 0) {
+      remainderBytes = chunk.slice(chunk.byteLength - bytesOverflowing);
+      chunk = chunk.slice(0, chunk.byteLength - bytesOverflowing);
+    }
+  }
+
   chunk = new TypedArrayConstructor(chunk);
   iterator.setChunk(chunk);
 
@@ -17358,45 +17367,65 @@ function consumeImageData(chunk, header, iterator) {
 
     voxels.push(createVoxel(i, j, k, header.matrix, value));
   }
+
+  return remainderBytes;
 }
 
-function getSliceK(header, index) {
-  var width = header.voxelLength[0];
-  var height = header.voxelLength[1];
-  var selectedVoxels = voxels.filter(function (v) {
-    return v.k === index;
-  });
+function getSlice(dim, header, index) {
+  var width = null;
+  var height = null;
+  var axis = null;
+  var plane = null;
 
-  return selectedVoxels.map(function (v) {
-    return v.value;
-  });
+  switch (dim) {
+    case 'x':
+      axis = dim;
+      plane = header.volumeDimensions.min[axis] + header.pixelSpacing[0] * index;
+    // falls through
+    case 'i':
+      width = header.voxelLength[1];
+      height = header.voxelLength[2];
+      break;
+    case 'y':
+      axis = dim;
+      plane = header.volumeDimensions.min[axis] + header.pixelSpacing[1] * index;
+    // falls through
+    case 'j':
+      width = header.voxelLength[0];
+      height = header.voxelLength[2];
+      break;
+    case 'z':
+      axis = dim;
+      plane = header.volumeDimensions.min[axis] + header.pixelSpacing[2] * index;
+    // falls through
+    case 'k':
+      width = header.voxelLength[0];
+      height = header.voxelLength[1];
+      break;
+  }
+
+  var selectedVoxels = null;
+
+  if (axis && plane) {
+    selectedVoxels = voxels.filter(function (v) {
+      var position = v.coords[axis];
+
+      return position >= plane - Number.EPSILON && position <= plane + Number.EPSILON;
+    });
+  } else {
+    selectedVoxels = voxels.filter(function (v) {
+      return v[dim] === index;
+    });
+  }
+
+  return {
+    width: width,
+    height: height,
+    values: selectedVoxels.map(function (v) {
+      return v.value;
+    })
+  };
 }
-
-function getSliceJ(header, index) {
-  var width = header.voxelLength[0];
-  var height = header.voxelLength[2];
-  var selectedVoxels = voxels.filter(function (v) {
-    return v.j === index;
-  });
-
-  return selectedVoxels.map(function (v) {
-    return v.value;
-  });
-}
-
-function getSliceI(header, index) {
-  var width = header.voxelLength[1];
-  var height = header.voxelLength[2];
-  var selectedVoxels = voxels.filter(function (v) {
-    return v.i === index;
-  });
-
-  return selectedVoxels.map(function (v) {
-    return v.value;
-  });
-}
-
-function getSliceZ(header, index) {}
 
 /***/ }),
 
@@ -17420,11 +17449,9 @@ var cornerstone = _interopRequireWildcard(_cornerstoneCore);
 
 function _interopRequireWildcard(obj) { if (obj && obj.__esModule) { return obj; } else { var newObj = {}; if (obj != null) { for (var key in obj) { if (Object.prototype.hasOwnProperty.call(obj, key)) newObj[key] = obj[key]; } } newObj.default = obj; return newObj; } }
 
-function createDummyImageLoader(imageId, header, imageData) {
+function createDummyImageLoader(imageId, header, imageData, width, height) {
 
   function getExampleImage(imageId) {
-    var width = header.voxelLength[0];
-    var height = header.voxelLength[1];
 
     var image = {
       imageId: imageId,
@@ -17560,6 +17587,7 @@ formEl.addEventListener('submit', function (e) {
   var parsedHeader = null;
   var decompressedHeaderRemainderBuffer = null;
   var matrixIterator = null;
+  var remainderBytesFromPreviousChunk = null;
 
   (0, _request2.default)(fileEl.value, reportProgress, chunkReceived, done);
 
@@ -17603,28 +17631,43 @@ formEl.addEventListener('submit', function (e) {
         decompressedHeaderRemainderBuffer = null;
       } else if (isCompressed) {
         inflator.push(chunk, _pako2.default.Z_SYNC_FLUSH);
-        chunk = inflator.result.buffer;
+        if (remainderBytesFromPreviousChunk && remainderBytesFromPreviousChunk.byteLength > 0) {
+          chunk = (0, _growBuffer2.default)(remainderBytesFromPreviousChunk, inflator.result.buffer);
+        } else {
+          chunk = inflator.result.buffer;
+        }
       }
 
+      // NEED TO GRAB THE BYTES THAT REMAINDED FROM THIS CHUNK (eg, byte alignment
+      // of floats) and prepend them to the next chunk
       // do whatever has to be done with this new data
-      (0, _consumeImageData.consumeImageData)(chunk, parsedHeader, matrixIterator);
+      remainderBytesFromPreviousChunk = (0, _consumeImageData.consumeImageData)(chunk, parsedHeader, matrixIterator);
+
+      // if there is still something let on the chunk, it means that this
+      // NIfTI image uses more than 1 byte per value and there was a remainder
+      // of this chunk, that needs to be prepended to the next
+      // if (chunk.length ) {
+      //
+      // }
 
       // just grabs the first axial slice, supposing the initial chunk was
       // big enough to hold all of its pixels
       // this is just a temporary, for an initial demo purpose
-      if (!window.hasPrintedSlice0) {
-        var imageIdObject = _ImageId2.default.fromURL('nifti:' + fileEl.value);
-        var slice0 = (0, _consumeImageData.getSliceK)(parsedHeader, imageIdObject.slice.index);
-
-        (0, _dummyImageLoader2.default)(imageIdObject.url, parsedHeader, slice0);
-        var element = document.querySelector('#cornerstone-image');
-
-        cornerstone.enable(element);
-        cornerstone.loadImage(imageIdObject.url).then(function (image) {
-          cornerstone.displayImage(element, image);
-        });
-        window.hasPrintedSlice0 = true;
-      }
+      setTimeout(function () {
+        // if (!window.hasPrintedSlice0) {
+        //   const imageIdObject = ImageId.fromURL(`nifti:${fileEl.value}`);
+        //   const { width, height, values } = getSlice(imageIdObject.slice.dimension, parsedHeader, imageIdObject.slice.index);
+        //
+        //   createDummyImageLoader(imageIdObject.url, parsedHeader, values, width, height);
+        //   const element = document.querySelector('#cornerstone-image');
+        //
+        //   cornerstone.enable(element);
+        //   cornerstone.loadImage(imageIdObject.url).then((image) => {
+        //     cornerstone.displayImage(element, image);
+        //   });
+        //   window.hasPrintedSlice0 = true;
+        // }
+      }, 5000);
 
       totalDecompressedBytesRead += chunk.byteLength;
     }
@@ -17634,6 +17677,24 @@ formEl.addEventListener('submit', function (e) {
     inflator.push([], true);
     logger.info('Total of bytes *compressed*: ' + totalBytesRead.toLocaleString());
     logger.info('Total of bytes *decompressed*: ' + totalDecompressedBytesRead.toLocaleString());
+
+    if (!window.hasPrintedSlice0) {
+      var imageIdObject = _ImageId2.default.fromURL('nifti:' + fileEl.value);
+
+      var _getSlice = (0, _consumeImageData.getSlice)(imageIdObject.slice.dimension, parsedHeader, imageIdObject.slice.index),
+          width = _getSlice.width,
+          height = _getSlice.height,
+          values = _getSlice.values;
+
+      (0, _dummyImageLoader2.default)(imageIdObject.url, parsedHeader, values, width, height);
+      var element = document.querySelector('#cornerstone-image');
+
+      cornerstone.enable(element);
+      cornerstone.loadImage(imageIdObject.url).then(function (image) {
+        cornerstone.displayImage(element, image);
+      });
+      window.hasPrintedSlice0 = true;
+    }
   }
 });
 
@@ -17897,6 +17958,10 @@ function parseNiftiHeader(fileData) {
   var orientationMatrix = getOrientationMatrix(header);
   var orientationString = header.convertNiftiSFormToNEMA(orientationMatrix);
   var matrix = new (Function.prototype.bind.apply(_cornerstoneMath.Matrix4, [null].concat(_toConsumableArray(orientationMatrix[0]), _toConsumableArray(orientationMatrix[1]), _toConsumableArray(orientationMatrix[2]), _toConsumableArray(orientationMatrix[3]))))();
+  var volumeDimensions = {
+    min: new _cornerstoneMath.Vector3(0, 0, 0).applyMatrix4(matrix),
+    max: new (Function.prototype.bind.apply(_cornerstoneMath.Vector3, [null].concat(_toConsumableArray(voxelLength.slice(0, 3)))))().applyMatrix4(matrix)
+  };
 
   return {
     slope: slope,
@@ -17911,6 +17976,7 @@ function parseNiftiHeader(fileData) {
     orientationMatrix: orientationMatrix,
     orientationString: orientationString,
     matrix: matrix,
+    volumeDimensions: volumeDimensions,
     header: header
   };
 }

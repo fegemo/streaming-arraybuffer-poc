@@ -1,5 +1,5 @@
 import * as nifti from 'nifti-reader-js';
-import { Matrix4 } from 'cornerstone-math';
+import { Vector3, Matrix4 } from 'cornerstone-math';
 
 export function parseNiftiHeader (fileData) {
   // reads the header with the metadata and puts the
@@ -37,6 +37,10 @@ export function parseNiftiHeader (fileData) {
   const orientationMatrix = getOrientationMatrix(header);
   const orientationString = header.convertNiftiSFormToNEMA(orientationMatrix);
   const matrix = new Matrix4(...orientationMatrix[0], ...orientationMatrix[1], ...orientationMatrix[2], ...orientationMatrix[3]);
+  const volumeDimensions = {
+    min: new Vector3(0, 0, 0).applyMatrix4(matrix),
+    max: new Vector3(...voxelLength.slice(0, 3)).applyMatrix4(matrix)
+  };
 
   return {
     slope,
@@ -51,6 +55,7 @@ export function parseNiftiHeader (fileData) {
     orientationMatrix,
     orientationString,
     matrix,
+    volumeDimensions,
     header
   };
 }

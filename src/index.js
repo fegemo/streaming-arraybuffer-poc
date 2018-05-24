@@ -4,7 +4,7 @@ import { HTMLLogger as Logger } from './log';
 import growBuffer from './growBuffer';
 import pako from 'pako';
 import { parseNiftiHeader } from './parseNiftiHeader';
-import { consumeImageData, getSliceK } from './consumeImageData';
+import { consumeImageData, getSlice } from './consumeImageData';
 import ImageId from './ImageId';
 import MatrixIterator from './MatrixIterator';
 import * as cornerstone from 'cornerstone-core';
@@ -28,6 +28,7 @@ formEl.addEventListener('submit', (e) => {
   let parsedHeader = null;
   let decompressedHeaderRemainderBuffer = null;
   let matrixIterator = null;
+  let remainderBytesFromPreviousChunk = null;
 
 
   request(fileEl.value, reportProgress, chunkReceived, done);
@@ -72,30 +73,44 @@ formEl.addEventListener('submit', (e) => {
         decompressedHeaderRemainderBuffer = null;
       } else if (isCompressed) {
         inflator.push(chunk, pako.Z_SYNC_FLUSH);
-        chunk = inflator.result.buffer;
+        if (remainderBytesFromPreviousChunk && remainderBytesFromPreviousChunk.byteLength > 0) {
+          chunk = growBuffer(remainderBytesFromPreviousChunk, inflator.result.buffer);
+        } else {
+          chunk = inflator.result.buffer;
+        }
       }
 
 
+      // NEED TO GRAB THE BYTES THAT REMAINDED FROM THIS CHUNK (eg, byte alignment
+      // of floats) and prepend them to the next chunk
       // do whatever has to be done with this new data
-      consumeImageData(chunk, parsedHeader, matrixIterator);
+      remainderBytesFromPreviousChunk = consumeImageData(chunk, parsedHeader, matrixIterator);
 
+      // if there is still something let on the chunk, it means that this
+      // NIfTI image uses more than 1 byte per value and there was a remainder
+      // of this chunk, that needs to be prepended to the next
+      // if (chunk.length ) {
+      //
+      // }
 
       // just grabs the first axial slice, supposing the initial chunk was
       // big enough to hold all of its pixels
       // this is just a temporary, for an initial demo purpose
-      if (!window.hasPrintedSlice0) {
-        const imageIdObject = ImageId.fromURL(`nifti:${fileEl.value}`);
-        const slice0 = getSliceK(parsedHeader, imageIdObject.slice.index);
-
-        createDummyImageLoader(imageIdObject.url, parsedHeader, slice0);
-        const element = document.querySelector('#cornerstone-image');
-
-        cornerstone.enable(element);
-        cornerstone.loadImage(imageIdObject.url).then((image) => {
-          cornerstone.displayImage(element, image);
-        });
-        window.hasPrintedSlice0 = true;
-      }
+      setTimeout(() => {
+        // if (!window.hasPrintedSlice0) {
+        //   const imageIdObject = ImageId.fromURL(`nifti:${fileEl.value}`);
+        //   const { width, height, values } = getSlice(imageIdObject.slice.dimension, parsedHeader, imageIdObject.slice.index);
+        //
+        //   createDummyImageLoader(imageIdObject.url, parsedHeader, values, width, height);
+        //   const element = document.querySelector('#cornerstone-image');
+        //
+        //   cornerstone.enable(element);
+        //   cornerstone.loadImage(imageIdObject.url).then((image) => {
+        //     cornerstone.displayImage(element, image);
+        //   });
+        //   window.hasPrintedSlice0 = true;
+        // }
+      }, 5000);
 
       totalDecompressedBytesRead += chunk.byteLength;
     }
@@ -105,6 +120,21 @@ formEl.addEventListener('submit', (e) => {
     inflator.push([], true);
     logger.info(`Total of bytes *compressed*: ${totalBytesRead.toLocaleString()}`);
     logger.info(`Total of bytes *decompressed*: ${totalDecompressedBytesRead.toLocaleString()}`);
+
+
+    if (!window.hasPrintedSlice0) {
+      const imageIdObject = ImageId.fromURL(`nifti:${fileEl.value}`);
+      const { width, height, values } = getSlice(imageIdObject.slice.dimension, parsedHeader, imageIdObject.slice.index);
+
+      createDummyImageLoader(imageIdObject.url, parsedHeader, values, width, height);
+      const element = document.querySelector('#cornerstone-image');
+
+      cornerstone.enable(element);
+      cornerstone.loadImage(imageIdObject.url).then((image) => {
+        cornerstone.displayImage(element, image);
+      });
+      window.hasPrintedSlice0 = true;
+    }
   }
 });
 
