@@ -4,7 +4,7 @@ import { HTMLLogger as Logger } from './log';
 import growBuffer from './growBuffer';
 import pako from 'pako';
 import { parseNiftiHeader } from './parseNiftiHeader';
-import { consumeImageData, getSlice } from './consumeImageData';
+import { getSlice } from './consumeImageData';
 import ImageId from './ImageId';
 import MatrixIterator from './MatrixIterator';
 import * as cornerstone from 'cornerstone-core';
@@ -15,6 +15,7 @@ const formEl = document.querySelector('form');
 const fileEl = formEl.querySelector('#file');
 const progressEl = formEl.querySelector('#progress');
 
+let matrixIterator = null;
 
 formEl.addEventListener('submit', (e) => {
   e.preventDefault();
@@ -27,7 +28,6 @@ formEl.addEventListener('submit', (e) => {
   const inflator = new pako.Inflate();
   let parsedHeader = null;
   let decompressedHeaderRemainderBuffer = null;
-  let matrixIterator = null;
   let remainderBytesFromPreviousChunk = null;
 
 
@@ -59,8 +59,9 @@ formEl.addEventListener('submit', (e) => {
 
         // parse the header using nifti-reader-js
         parsedHeader = parseNiftiHeader(headerBytes);
+        decompressedHeaderRemainderBuffer = decompressedHeaderRemainderBuffer.slice(parsedHeader.header.vox_offset - HEADER_LENGTH);
         console.dir(parsedHeader);
-        matrixIterator = new MatrixIterator(parsedHeader.voxelLength);
+        matrixIterator = new MatrixIterator(parsedHeader.voxelLength, parsedHeader.dataType.TypedArrayConstructor);
 
         totalDecompressedBytesRead += HEADER_LENGTH;
       }
@@ -78,39 +79,31 @@ formEl.addEventListener('submit', (e) => {
         } else {
           chunk = inflator.result.buffer;
         }
+      } else if (remainderBytesFromPreviousChunk && remainderBytesFromPreviousChunk.byteLength > 0) {
+        chunk = growBuffer(remainderBytesFromPreviousChunk, chunk);
       }
 
 
       // NEED TO GRAB THE BYTES THAT REMAINDED FROM THIS CHUNK (eg, byte alignment
       // of floats) and prepend them to the next chunk
-      // do whatever has to be done with this new data
-      remainderBytesFromPreviousChunk = consumeImageData(chunk, parsedHeader, matrixIterator);
+      remainderBytesFromPreviousChunk = matrixIterator.addChunk(chunk, parsedHeader);
 
-      // if there is still something let on the chunk, it means that this
-      // NIfTI image uses more than 1 byte per value and there was a remainder
-      // of this chunk, that needs to be prepended to the next
-      // if (chunk.length ) {
-      //
-      // }
 
-      // just grabs the first axial slice, supposing the initial chunk was
-      // big enough to hold all of its pixels
-      // this is just a temporary, for an initial demo purpose
-      setTimeout(() => {
-        // if (!window.hasPrintedSlice0) {
-        //   const imageIdObject = ImageId.fromURL(`nifti:${fileEl.value}`);
-        //   const { width, height, values } = getSlice(imageIdObject.slice.dimension, parsedHeader, imageIdObject.slice.index);
-        //
-        //   createDummyImageLoader(imageIdObject.url, parsedHeader, values, width, height);
-        //   const element = document.querySelector('#cornerstone-image');
-        //
-        //   cornerstone.enable(element);
-        //   cornerstone.loadImage(imageIdObject.url).then((image) => {
-        //     cornerstone.displayImage(element, image);
-        //   });
-        //   window.hasPrintedSlice0 = true;
-        // }
-      }, 5000);
+      if (!window.hasPrintedSlice0) {
+        const imageIdObject = ImageId.fromURL(`nifti:${fileEl.value}`);
+
+        getSlice(imageIdObject.slice.dimension, parsedHeader, imageIdObject.slice.index, matrixIterator).
+          then(({ columns, rows, values }) => {
+            createDummyImageLoader(imageIdObject.url, parsedHeader, values, columns, rows);
+            const element = document.querySelector('#cornerstone-image');
+
+            cornerstone.enable(element);
+            cornerstone.loadImage(imageIdObject.url).then((image) => {
+              cornerstone.displayImage(element, image);
+            });
+          });
+        window.hasPrintedSlice0 = true;
+      }
 
       totalDecompressedBytesRead += chunk.byteLength;
     }
@@ -120,21 +113,6 @@ formEl.addEventListener('submit', (e) => {
     inflator.push([], true);
     logger.info(`Total of bytes *compressed*: ${totalBytesRead.toLocaleString()}`);
     logger.info(`Total of bytes *decompressed*: ${totalDecompressedBytesRead.toLocaleString()}`);
-
-
-    if (!window.hasPrintedSlice0) {
-      const imageIdObject = ImageId.fromURL(`nifti:${fileEl.value}`);
-      const { width, height, values } = getSlice(imageIdObject.slice.dimension, parsedHeader, imageIdObject.slice.index);
-
-      createDummyImageLoader(imageIdObject.url, parsedHeader, values, width, height);
-      const element = document.querySelector('#cornerstone-image');
-
-      cornerstone.enable(element);
-      cornerstone.loadImage(imageIdObject.url).then((image) => {
-        cornerstone.displayImage(element, image);
-      });
-      window.hasPrintedSlice0 = true;
-    }
   }
 });
 

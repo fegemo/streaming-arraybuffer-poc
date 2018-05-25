@@ -1,98 +1,54 @@
-import { Vector3 } from 'cornerstone-math';
+import flattenNDarray from './flattenNDarray';
 
-class Voxel {
-  constructor (coords, i, j, k, value) {
-    this.coords = coords;
-    this.i = i;
-    this.j = j;
-    this.k = k;
-    this.value = value;
-  }
-}
+const dimensionMap = {
+  x: 'i',
+  i: 'i',
+  y: 'j',
+  j: 'j',
+  z: 'k',
+  k: 'k'
+};
 
-const voxels = [];
+export function getSlice (dim, header, index, iterator) {
+  const dataAvailablePromise = iterator.sliceDataAvailablePromises[dimensionMap[dim]][index];
 
-function createVoxel (i, j, k, matrix, value) {
-  const position = new Vector3(i, j, k);
+  return dataAvailablePromise.then(() => {
+    let columns = null;
+    let rows = null;
+    let slicePick = [];
 
-  position.applyMatrix4(matrix);
-
-  return new Voxel(position, i, j, k, value);
-}
-
-export function consumeImageData (chunk, header, iterator) {
-  const TypedArrayConstructor = header.dataType.TypedArrayConstructor;
-  let remainderBytes = null;
-
-  if (TypedArrayConstructor.BYTES_PER_ELEMENT !== 1) {
-    const bytesOverflowing = chunk.byteLength % TypedArrayConstructor.BYTES_PER_ELEMENT;
-
-    if (bytesOverflowing > 0) {
-      remainderBytes = chunk.slice(chunk.byteLength - bytesOverflowing);
-      chunk = chunk.slice(0, chunk.byteLength - bytesOverflowing);
+    switch (dim) {
+    case 'x':
+      // falls through
+    case 'i':
+      columns = header.voxelLength[1];
+      rows = header.voxelLength[2];
+      slicePick = [index, null, null];
+      break;
+    case 'y':
+      // falls through
+    case 'j':
+      columns = header.voxelLength[0];
+      rows = header.voxelLength[2];
+      slicePick = [null, index, null];
+      break;
+    case 'z':
+      // falls through
+    case 'k':
+      columns = header.voxelLength[0];
+      rows = header.voxelLength[1];
+      slicePick = [null, null, index];
+      break;
     }
-  }
 
-  chunk = new TypedArrayConstructor(chunk);
-  iterator.setChunk(chunk);
+    const values = iterator.dataMatrix.pick(...slicePick);
 
-  for (let c = 0; c < chunk.length; c++) {
-    const { i, j, k, value } = iterator.next(chunk, header);
-
-    voxels.push(createVoxel(i, j, k, header.matrix, value));
-  }
-
-  return remainderBytes;
-}
-
-export function getSlice (dim, header, index) {
-  let width = null;
-  let height = null;
-  let axis = null;
-  let plane = null;
-
-  switch (dim) {
-  case 'x':
-    axis = dim;
-    plane = (header.volumeDimensions.min[axis] + header.pixelSpacing[0] * index);
-    // falls through
-  case 'i':
-    width = header.voxelLength[1];
-    height = header.voxelLength[2];
-    break;
-  case 'y':
-    axis = dim;
-    plane = (header.volumeDimensions.min[axis] + header.pixelSpacing[1] * index);
-    // falls through
-  case 'j':
-    width = header.voxelLength[0];
-    height = header.voxelLength[2];
-    break;
-  case 'z':
-    axis = dim;
-    plane = (header.volumeDimensions.min[axis] + header.pixelSpacing[2] * index);
-    // falls through
-  case 'k':
-    width = header.voxelLength[0];
-    height = header.voxelLength[1];
-    break;
-  }
-
-  let selectedVoxels = null;
-
-  if (axis && plane) {
-    selectedVoxels = voxels.filter((v) => {
-      const position = v.coords[axis];
-
-      return position >= plane - Number.EPSILON && position <= plane + Number.EPSILON;
+    return new Promise((resolve) => {
+      resolve({
+        columns,
+        rows,
+        values: flattenNDarray(values)
+      });
     });
-  } else {
-    selectedVoxels = voxels.filter((v) => v[dim] === index);
-  }
-
-  return {
-    width,
-    height,
-    values: selectedVoxels.map((v) => v.value)
-  };
+  });
 }

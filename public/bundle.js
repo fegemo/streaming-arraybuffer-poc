@@ -2698,6 +2698,60 @@ if (typeof Object.create === 'function') {
 
 /***/ }),
 
+/***/ "./node_modules/iota-array/iota.js":
+/*!*****************************************!*\
+  !*** ./node_modules/iota-array/iota.js ***!
+  \*****************************************/
+/*! no static exports found */
+/***/ (function(module, exports, __webpack_require__) {
+
+"use strict";
+
+
+function iota(n) {
+  var result = new Array(n)
+  for(var i=0; i<n; ++i) {
+    result[i] = i
+  }
+  return result
+}
+
+module.exports = iota
+
+/***/ }),
+
+/***/ "./node_modules/is-buffer/index.js":
+/*!*****************************************!*\
+  !*** ./node_modules/is-buffer/index.js ***!
+  \*****************************************/
+/*! no static exports found */
+/***/ (function(module, exports) {
+
+/*!
+ * Determine if an object is a Buffer
+ *
+ * @author   Feross Aboukhadijeh <https://feross.org>
+ * @license  MIT
+ */
+
+// The _isBuffer check is for Safari 5-7 support, because it's missing
+// Object.prototype.constructor. Remove this eventually
+module.exports = function (obj) {
+  return obj != null && (isBuffer(obj) || isSlowBuffer(obj) || !!obj._isBuffer)
+}
+
+function isBuffer (obj) {
+  return !!obj.constructor && typeof obj.constructor.isBuffer === 'function' && obj.constructor.isBuffer(obj)
+}
+
+// For Node v0.10 support. Remove this eventually.
+function isSlowBuffer (obj) {
+  return typeof obj.readFloatLE === 'function' && typeof obj.slice === 'function' && isBuffer(obj.slice(0, 0))
+}
+
+
+/***/ }),
+
 /***/ "./node_modules/isarray/index.js":
 /*!***************************************!*\
   !*** ./node_modules/isarray/index.js ***!
@@ -2710,6 +2764,360 @@ var toString = {}.toString;
 module.exports = Array.isArray || function (arr) {
   return toString.call(arr) == '[object Array]';
 };
+
+
+/***/ }),
+
+/***/ "./node_modules/ndarray/ndarray.js":
+/*!*****************************************!*\
+  !*** ./node_modules/ndarray/ndarray.js ***!
+  \*****************************************/
+/*! no static exports found */
+/***/ (function(module, exports, __webpack_require__) {
+
+var iota = __webpack_require__(/*! iota-array */ "./node_modules/iota-array/iota.js")
+var isBuffer = __webpack_require__(/*! is-buffer */ "./node_modules/is-buffer/index.js")
+
+var hasTypedArrays  = ((typeof Float64Array) !== "undefined")
+
+function compare1st(a, b) {
+  return a[0] - b[0]
+}
+
+function order() {
+  var stride = this.stride
+  var terms = new Array(stride.length)
+  var i
+  for(i=0; i<terms.length; ++i) {
+    terms[i] = [Math.abs(stride[i]), i]
+  }
+  terms.sort(compare1st)
+  var result = new Array(terms.length)
+  for(i=0; i<result.length; ++i) {
+    result[i] = terms[i][1]
+  }
+  return result
+}
+
+function compileConstructor(dtype, dimension) {
+  var className = ["View", dimension, "d", dtype].join("")
+  if(dimension < 0) {
+    className = "View_Nil" + dtype
+  }
+  var useGetters = (dtype === "generic")
+
+  if(dimension === -1) {
+    //Special case for trivial arrays
+    var code =
+      "function "+className+"(a){this.data=a;};\
+var proto="+className+".prototype;\
+proto.dtype='"+dtype+"';\
+proto.index=function(){return -1};\
+proto.size=0;\
+proto.dimension=-1;\
+proto.shape=proto.stride=proto.order=[];\
+proto.lo=proto.hi=proto.transpose=proto.step=\
+function(){return new "+className+"(this.data);};\
+proto.get=proto.set=function(){};\
+proto.pick=function(){return null};\
+return function construct_"+className+"(a){return new "+className+"(a);}"
+    var procedure = new Function(code)
+    return procedure()
+  } else if(dimension === 0) {
+    //Special case for 0d arrays
+    var code =
+      "function "+className+"(a,d) {\
+this.data = a;\
+this.offset = d\
+};\
+var proto="+className+".prototype;\
+proto.dtype='"+dtype+"';\
+proto.index=function(){return this.offset};\
+proto.dimension=0;\
+proto.size=1;\
+proto.shape=\
+proto.stride=\
+proto.order=[];\
+proto.lo=\
+proto.hi=\
+proto.transpose=\
+proto.step=function "+className+"_copy() {\
+return new "+className+"(this.data,this.offset)\
+};\
+proto.pick=function "+className+"_pick(){\
+return TrivialArray(this.data);\
+};\
+proto.valueOf=proto.get=function "+className+"_get(){\
+return "+(useGetters ? "this.data.get(this.offset)" : "this.data[this.offset]")+
+"};\
+proto.set=function "+className+"_set(v){\
+return "+(useGetters ? "this.data.set(this.offset,v)" : "this.data[this.offset]=v")+"\
+};\
+return function construct_"+className+"(a,b,c,d){return new "+className+"(a,d)}"
+    var procedure = new Function("TrivialArray", code)
+    return procedure(CACHED_CONSTRUCTORS[dtype][0])
+  }
+
+  var code = ["'use strict'"]
+
+  //Create constructor for view
+  var indices = iota(dimension)
+  var args = indices.map(function(i) { return "i"+i })
+  var index_str = "this.offset+" + indices.map(function(i) {
+        return "this.stride[" + i + "]*i" + i
+      }).join("+")
+  var shapeArg = indices.map(function(i) {
+      return "b"+i
+    }).join(",")
+  var strideArg = indices.map(function(i) {
+      return "c"+i
+    }).join(",")
+  code.push(
+    "function "+className+"(a," + shapeArg + "," + strideArg + ",d){this.data=a",
+      "this.shape=[" + shapeArg + "]",
+      "this.stride=[" + strideArg + "]",
+      "this.offset=d|0}",
+    "var proto="+className+".prototype",
+    "proto.dtype='"+dtype+"'",
+    "proto.dimension="+dimension)
+
+  //view.size:
+  code.push("Object.defineProperty(proto,'size',{get:function "+className+"_size(){\
+return "+indices.map(function(i) { return "this.shape["+i+"]" }).join("*"),
+"}})")
+
+  //view.order:
+  if(dimension === 1) {
+    code.push("proto.order=[0]")
+  } else {
+    code.push("Object.defineProperty(proto,'order',{get:")
+    if(dimension < 4) {
+      code.push("function "+className+"_order(){")
+      if(dimension === 2) {
+        code.push("return (Math.abs(this.stride[0])>Math.abs(this.stride[1]))?[1,0]:[0,1]}})")
+      } else if(dimension === 3) {
+        code.push(
+"var s0=Math.abs(this.stride[0]),s1=Math.abs(this.stride[1]),s2=Math.abs(this.stride[2]);\
+if(s0>s1){\
+if(s1>s2){\
+return [2,1,0];\
+}else if(s0>s2){\
+return [1,2,0];\
+}else{\
+return [1,0,2];\
+}\
+}else if(s0>s2){\
+return [2,0,1];\
+}else if(s2>s1){\
+return [0,1,2];\
+}else{\
+return [0,2,1];\
+}}})")
+      }
+    } else {
+      code.push("ORDER})")
+    }
+  }
+
+  //view.set(i0, ..., v):
+  code.push(
+"proto.set=function "+className+"_set("+args.join(",")+",v){")
+  if(useGetters) {
+    code.push("return this.data.set("+index_str+",v)}")
+  } else {
+    code.push("return this.data["+index_str+"]=v}")
+  }
+
+  //view.get(i0, ...):
+  code.push("proto.get=function "+className+"_get("+args.join(",")+"){")
+  if(useGetters) {
+    code.push("return this.data.get("+index_str+")}")
+  } else {
+    code.push("return this.data["+index_str+"]}")
+  }
+
+  //view.index:
+  code.push(
+    "proto.index=function "+className+"_index(", args.join(), "){return "+index_str+"}")
+
+  //view.hi():
+  code.push("proto.hi=function "+className+"_hi("+args.join(",")+"){return new "+className+"(this.data,"+
+    indices.map(function(i) {
+      return ["(typeof i",i,"!=='number'||i",i,"<0)?this.shape[", i, "]:i", i,"|0"].join("")
+    }).join(",")+","+
+    indices.map(function(i) {
+      return "this.stride["+i + "]"
+    }).join(",")+",this.offset)}")
+
+  //view.lo():
+  var a_vars = indices.map(function(i) { return "a"+i+"=this.shape["+i+"]" })
+  var c_vars = indices.map(function(i) { return "c"+i+"=this.stride["+i+"]" })
+  code.push("proto.lo=function "+className+"_lo("+args.join(",")+"){var b=this.offset,d=0,"+a_vars.join(",")+","+c_vars.join(","))
+  for(var i=0; i<dimension; ++i) {
+    code.push(
+"if(typeof i"+i+"==='number'&&i"+i+">=0){\
+d=i"+i+"|0;\
+b+=c"+i+"*d;\
+a"+i+"-=d}")
+  }
+  code.push("return new "+className+"(this.data,"+
+    indices.map(function(i) {
+      return "a"+i
+    }).join(",")+","+
+    indices.map(function(i) {
+      return "c"+i
+    }).join(",")+",b)}")
+
+  //view.step():
+  code.push("proto.step=function "+className+"_step("+args.join(",")+"){var "+
+    indices.map(function(i) {
+      return "a"+i+"=this.shape["+i+"]"
+    }).join(",")+","+
+    indices.map(function(i) {
+      return "b"+i+"=this.stride["+i+"]"
+    }).join(",")+",c=this.offset,d=0,ceil=Math.ceil")
+  for(var i=0; i<dimension; ++i) {
+    code.push(
+"if(typeof i"+i+"==='number'){\
+d=i"+i+"|0;\
+if(d<0){\
+c+=b"+i+"*(a"+i+"-1);\
+a"+i+"=ceil(-a"+i+"/d)\
+}else{\
+a"+i+"=ceil(a"+i+"/d)\
+}\
+b"+i+"*=d\
+}")
+  }
+  code.push("return new "+className+"(this.data,"+
+    indices.map(function(i) {
+      return "a" + i
+    }).join(",")+","+
+    indices.map(function(i) {
+      return "b" + i
+    }).join(",")+",c)}")
+
+  //view.transpose():
+  var tShape = new Array(dimension)
+  var tStride = new Array(dimension)
+  for(var i=0; i<dimension; ++i) {
+    tShape[i] = "a[i"+i+"]"
+    tStride[i] = "b[i"+i+"]"
+  }
+  code.push("proto.transpose=function "+className+"_transpose("+args+"){"+
+    args.map(function(n,idx) { return n + "=(" + n + "===undefined?" + idx + ":" + n + "|0)"}).join(";"),
+    "var a=this.shape,b=this.stride;return new "+className+"(this.data,"+tShape.join(",")+","+tStride.join(",")+",this.offset)}")
+
+  //view.pick():
+  code.push("proto.pick=function "+className+"_pick("+args+"){var a=[],b=[],c=this.offset")
+  for(var i=0; i<dimension; ++i) {
+    code.push("if(typeof i"+i+"==='number'&&i"+i+">=0){c=(c+this.stride["+i+"]*i"+i+")|0}else{a.push(this.shape["+i+"]);b.push(this.stride["+i+"])}")
+  }
+  code.push("var ctor=CTOR_LIST[a.length+1];return ctor(this.data,a,b,c)}")
+
+  //Add return statement
+  code.push("return function construct_"+className+"(data,shape,stride,offset){return new "+className+"(data,"+
+    indices.map(function(i) {
+      return "shape["+i+"]"
+    }).join(",")+","+
+    indices.map(function(i) {
+      return "stride["+i+"]"
+    }).join(",")+",offset)}")
+
+  //Compile procedure
+  var procedure = new Function("CTOR_LIST", "ORDER", code.join("\n"))
+  return procedure(CACHED_CONSTRUCTORS[dtype], order)
+}
+
+function arrayDType(data) {
+  if(isBuffer(data)) {
+    return "buffer"
+  }
+  if(hasTypedArrays) {
+    switch(Object.prototype.toString.call(data)) {
+      case "[object Float64Array]":
+        return "float64"
+      case "[object Float32Array]":
+        return "float32"
+      case "[object Int8Array]":
+        return "int8"
+      case "[object Int16Array]":
+        return "int16"
+      case "[object Int32Array]":
+        return "int32"
+      case "[object Uint8Array]":
+        return "uint8"
+      case "[object Uint16Array]":
+        return "uint16"
+      case "[object Uint32Array]":
+        return "uint32"
+      case "[object Uint8ClampedArray]":
+        return "uint8_clamped"
+    }
+  }
+  if(Array.isArray(data)) {
+    return "array"
+  }
+  return "generic"
+}
+
+var CACHED_CONSTRUCTORS = {
+  "float32":[],
+  "float64":[],
+  "int8":[],
+  "int16":[],
+  "int32":[],
+  "uint8":[],
+  "uint16":[],
+  "uint32":[],
+  "array":[],
+  "uint8_clamped":[],
+  "buffer":[],
+  "generic":[]
+}
+
+;(function() {
+  for(var id in CACHED_CONSTRUCTORS) {
+    CACHED_CONSTRUCTORS[id].push(compileConstructor(id, -1))
+  }
+});
+
+function wrappedNDArrayCtor(data, shape, stride, offset) {
+  if(data === undefined) {
+    var ctor = CACHED_CONSTRUCTORS.array[0]
+    return ctor([])
+  } else if(typeof data === "number") {
+    data = [data]
+  }
+  if(shape === undefined) {
+    shape = [ data.length ]
+  }
+  var d = shape.length
+  if(stride === undefined) {
+    stride = new Array(d)
+    for(var i=d-1, sz=1; i>=0; --i) {
+      stride[i] = sz
+      sz *= shape[i]
+    }
+  }
+  if(offset === undefined) {
+    offset = 0
+    for(var i=0; i<d; ++i) {
+      if(stride[i] < 0) {
+        offset -= (shape[i]-1)*stride[i]
+      }
+    }
+  }
+  var dtype = arrayDType(data)
+  var ctor_list = CACHED_CONSTRUCTORS[dtype]
+  while(ctor_list.length <= d+1) {
+    ctor_list.push(compileConstructor(dtype, ctor_list.length-1))
+  }
+  var ctor = ctor_list[d+1]
+  return ctor(data, shape, stride, offset)
+}
+
+module.exports = wrappedNDArrayCtor
 
 
 /***/ }),
@@ -17223,9 +17631,30 @@ Object.defineProperty(exports, "__esModule", {
 
 var _createClass = function () { function defineProperties(target, props) { for (var i = 0; i < props.length; i++) { var descriptor = props[i]; descriptor.enumerable = descriptor.enumerable || false; descriptor.configurable = true; if ("value" in descriptor) descriptor.writable = true; Object.defineProperty(target, descriptor.key, descriptor); } } return function (Constructor, protoProps, staticProps) { if (protoProps) defineProperties(Constructor.prototype, protoProps); if (staticProps) defineProperties(Constructor, staticProps); return Constructor; }; }();
 
+var _ndarray = __webpack_require__(/*! ndarray */ "./node_modules/ndarray/ndarray.js");
+
+var _ndarray2 = _interopRequireDefault(_ndarray);
+
+var _log = __webpack_require__(/*! ./log */ "./src/log/index.js");
+
+var _convertFloatDataToInteger = __webpack_require__(/*! ./convertFloatDataToInteger */ "./src/convertFloatDataToInteger.js");
+
+var _createSliceDataAvailablePromises = __webpack_require__(/*! ./createSliceDataAvailablePromises */ "./src/createSliceDataAvailablePromises.js");
+
+var _createSliceDataAvailablePromises2 = _interopRequireDefault(_createSliceDataAvailablePromises);
+
+var _events = __webpack_require__(/*! ./events */ "./src/events.js");
+
+var _events2 = _interopRequireDefault(_events);
+
+function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
+
 function _classCallCheck(instance, Constructor) { if (!(instance instanceof Constructor)) { throw new TypeError("Cannot call a class as a function"); } }
 
-var addOne = Symbol('addOne');
+var logger = new _log.HTMLLogger('#logging');
+
+// const addOne = Symbol('addOne');
+// const next = Symbol('next');
 
 /**
  * An object that keeps the state of a n-dimensional matrix that is being
@@ -17235,63 +17664,66 @@ var addOne = Symbol('addOne');
 var MatrixIterator = function () {
   function MatrixIterator() {
     var dimensions = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : [1];
+    var Type = arguments[1];
 
     _classCallCheck(this, MatrixIterator);
 
     this.dimensions = dimensions;
+    this.Type = Type;
+    this.bytesPerVoxel = Type.BYTES_PER_ELEMENT;
     this.strides = this.dimensions.reduce(function (strides, _, i, dims) {
       var previousDimension = dims[i - 1] || 1;
       var previousStride = strides[i - 1] || 1;
+
       strides.push(previousDimension * previousStride);
+
       return strides;
     }, []);
-    this.cursor = dimensions.map(function () {
-      return 0;
-    });
-    this.currentDimension = 0;
+
+    var numberOfVoxels = dimensions.reduce(function (accum, dim) {
+      return accum * dim;
+    }, 1);
+
+    this.OriginalType = Type;
+    if (Type === Float32Array) {
+      this.Type = Uint16Array;
+    }
+    this.dataBuffer = new Type(numberOfVoxels);
+    this.dataMatrix = (0, _ndarray2.default)(this.dataBuffer, this.dimensions, this.strides);
+    this.currentBufferSize = 0;
+
+    (0, _events2.default)(this);
+    this.sliceDataAvailablePromises = (0, _createSliceDataAvailablePromises2.default)(this);
   }
 
   _createClass(MatrixIterator, [{
-    key: addOne,
-    value: function value() {
-      this.cursor[this.currentDimension]++;
+    key: 'addChunk',
+    value: function addChunk(chunk, metaData) {
+      var remainderBytes = chunk.byteLength % this.bytesPerVoxel;
+      var chunkRemainder = chunk.slice(chunk.byteLength - remainderBytes);
 
-      // check if need to carry to the next dimension
-      if (this.cursor[this.currentDimension] >= this.dimensions[this.currentDimension]) {
-        // resets current dimension to 0
-        this.cursor[this.currentDimension] = 0;
-        // changes current dimension to the next one
-        this.currentDimension++;
-        // carries 01 to the new dimension (recursively)
-        this[addOne]();
+      logger.info('addChunk of byteLength = ' + chunk.byteLength + ', remainder of ' + remainderBytes);
 
-        // goes back to the previous dimension, as it now has reset
-        this.currentDimension--;
-      }
-    }
-  }, {
-    key: 'setChunk',
-    value: function setChunk(chunk) {
-      this.chunk = chunk;
-      this.indexInChunk = 0;
-    }
-  }, {
-    key: 'next',
-    value: function next() {
-      // assembles the object that contains the current value (i,j,k and value)
-      var value = {
-        i: this.cursor[0],
-        j: this.cursor[1],
-        k: this.cursor[2],
-        value: this.chunk[this.indexInChunk]
-      };
+      // gets only the "byte aligned" portion of the chunk and converts to the
+      // proper typed array
+      chunk = chunk.slice(0, chunk.byteLength - remainderBytes);
+      chunk = new this.OriginalType(chunk);
 
-      this.indexInChunk++;
-      // tries to sum 1 to the first dimension... if exceeds, sums 1 to the next
-      // and if that exceeds, sums 1 to the third and so on
-      this[addOne]();
+      // transforms the chunk, in case it requires (endianess, float to int etc.)
+      // cannot do the float to int conversion without having min/max float values
+      // if (this.OriginalType === Float32Array) {
+      //   chunk = convertFloatChunkToInteger(chunk, metaData);
+      // }
 
-      return value;
+
+      this.dataBuffer.set(chunk, this.currentBufferSize);
+      this.currentBufferSize += chunk.length;
+      logger.info('this.currentBufferSize = ' + this.currentBufferSize);
+
+      // check if we can resolve some "slice download" promises
+      this.emit('chunkReceived', this);
+
+      return chunkRemainder;
     }
   }]);
 
@@ -17315,116 +17747,234 @@ exports.default = MatrixIterator;
 Object.defineProperty(exports, "__esModule", {
   value: true
 });
-exports.consumeImageData = consumeImageData;
 exports.getSlice = getSlice;
 
-var _cornerstoneMath = __webpack_require__(/*! cornerstone-math */ "./node_modules/cornerstone-math/dist/cornerstoneMath.min.js");
+var _flattenNDarray = __webpack_require__(/*! ./flattenNDarray */ "./src/flattenNDarray.js");
 
-function _classCallCheck(instance, Constructor) { if (!(instance instanceof Constructor)) { throw new TypeError("Cannot call a class as a function"); } }
+var _flattenNDarray2 = _interopRequireDefault(_flattenNDarray);
 
-var Voxel = function Voxel(coords, i, j, k, value) {
-  _classCallCheck(this, Voxel);
+function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
 
-  this.coords = coords;
-  this.i = i;
-  this.j = j;
-  this.k = k;
-  this.value = value;
+function _toConsumableArray(arr) { if (Array.isArray(arr)) { for (var i = 0, arr2 = Array(arr.length); i < arr.length; i++) { arr2[i] = arr[i]; } return arr2; } else { return Array.from(arr); } }
+
+var dimensionMap = {
+  x: 'i',
+  i: 'i',
+  y: 'j',
+  j: 'j',
+  z: 'k',
+  k: 'k'
 };
 
-var voxels = [];
+function getSlice(dim, header, index, iterator) {
+  var dataAvailablePromise = iterator.sliceDataAvailablePromises[dimensionMap[dim]][index];
 
-function createVoxel(i, j, k, matrix, value) {
-  var position = new _cornerstoneMath.Vector3(i, j, k);
+  return dataAvailablePromise.then(function () {
+    var _iterator$dataMatrix;
 
-  position.applyMatrix4(matrix);
+    var columns = null;
+    var rows = null;
+    var slicePick = [];
 
-  return new Voxel(position, i, j, k, value);
+    switch (dim) {
+      case 'x':
+      // falls through
+      case 'i':
+        columns = header.voxelLength[1];
+        rows = header.voxelLength[2];
+        slicePick = [index, null, null];
+        break;
+      case 'y':
+      // falls through
+      case 'j':
+        columns = header.voxelLength[0];
+        rows = header.voxelLength[2];
+        slicePick = [null, index, null];
+        break;
+      case 'z':
+      // falls through
+      case 'k':
+        columns = header.voxelLength[0];
+        rows = header.voxelLength[1];
+        slicePick = [null, null, index];
+        break;
+    }
+
+    var values = (_iterator$dataMatrix = iterator.dataMatrix).pick.apply(_iterator$dataMatrix, _toConsumableArray(slicePick));
+
+    return new Promise(function (resolve) {
+      resolve({
+        columns: columns,
+        rows: rows,
+        values: (0, _flattenNDarray2.default)(values)
+      });
+    });
+  });
 }
 
-function consumeImageData(chunk, header, iterator) {
-  var TypedArrayConstructor = header.dataType.TypedArrayConstructor;
-  var remainderBytes = null;
+/***/ }),
 
-  if (TypedArrayConstructor.BYTES_PER_ELEMENT !== 1) {
-    var bytesOverflowing = chunk.byteLength % TypedArrayConstructor.BYTES_PER_ELEMENT;
+/***/ "./src/convertFloatDataToInteger.js":
+/*!******************************************!*\
+  !*** ./src/convertFloatDataToInteger.js ***!
+  \******************************************/
+/*! no static exports found */
+/***/ (function(module, exports, __webpack_require__) {
 
-    if (bytesOverflowing > 0) {
-      remainderBytes = chunk.slice(chunk.byteLength - bytesOverflowing);
-      chunk = chunk.slice(0, chunk.byteLength - bytesOverflowing);
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", {
+  value: true
+});
+exports.convertFloatChunkToInteger = convertFloatChunkToInteger;
+exports.convertFloatDataToInteger = convertFloatDataToInteger;
+
+var _ndarray = __webpack_require__(/*! ndarray */ "./node_modules/ndarray/ndarray.js");
+
+var _ndarray2 = _interopRequireDefault(_ndarray);
+
+function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
+
+function linearTransformation(value, slope, intercept) {
+  return (value - intercept) / slope;
+} /* eslint import/extensions:0 */
+
+
+function minMax(array) {
+  var min = array[0];
+  var max = array[0];
+
+  for (var c = 1; c < array.length; c++) {
+    if (array[c] < min) {
+      min = array[c];
+    } else if (array[c] > max) {
+      max = array[c];
     }
   }
 
-  chunk = new TypedArrayConstructor(chunk);
-  iterator.setChunk(chunk);
-
-  for (var c = 0; c < chunk.length; c++) {
-    var _iterator$next = iterator.next(chunk, header),
-        i = _iterator$next.i,
-        j = _iterator$next.j,
-        k = _iterator$next.k,
-        value = _iterator$next.value;
-
-    voxels.push(createVoxel(i, j, k, header.matrix, value));
-  }
-
-  return remainderBytes;
+  return {
+    min: min,
+    max: max
+  };
 }
 
-function getSlice(dim, header, index) {
-  var width = null;
-  var height = null;
-  var axis = null;
-  var plane = null;
+function convertFloatChunkToInteger(chunk, metaData) {
+  if (!metaData.slope && !metaData.intercept) {
+    var integerRange = Math.pow(2, 16) - 1; // 65535
 
-  switch (dim) {
-    case 'x':
-      axis = dim;
-      plane = header.volumeDimensions.min[axis] + header.pixelSpacing[0] * index;
-    // falls through
-    case 'i':
-      width = header.voxelLength[1];
-      height = header.voxelLength[2];
-      break;
-    case 'y':
-      axis = dim;
-      plane = header.volumeDimensions.min[axis] + header.pixelSpacing[1] * index;
-    // falls through
-    case 'j':
-      width = header.voxelLength[0];
-      height = header.voxelLength[2];
-      break;
-    case 'z':
-      axis = dim;
-      plane = header.volumeDimensions.min[axis] + header.pixelSpacing[2] * index;
-    // falls through
-    case 'k':
-      width = header.voxelLength[0];
-      height = header.voxelLength[1];
-      break;
+    var _minMax = minMax(chunk),
+        min = _minMax.min,
+        max = _minMax.max;
+
+    var floatRange = max - min;
+
+    metaData.slope = floatRange === 0 ? 1 : floatRange / integerRange;
+    metaData.intercept = min;
   }
 
-  var selectedVoxels = null;
+  var integerChunk = new Uint16Array(chunk.length);
+  var slope = metaData.slope;
+  var intercept = metaData.intercept;
 
-  if (axis && plane) {
-    selectedVoxels = voxels.filter(function (v) {
-      var position = v.coords[axis];
+  for (var c = 0; c < chunk.length; c++) {
+    integerChunk[c] = Math.floor(linearTransformation(chunk[c], slope, intercept));
+  }
 
-      return position >= plane - Number.EPSILON && position <= plane + Number.EPSILON;
-    });
-  } else {
-    selectedVoxels = voxels.filter(function (v) {
-      return v[dim] === index;
-    });
+  return integerChunk;
+}
+
+function convertFloatDataToInteger(imageDataView, metaData) {
+  var intRange = Math.pow(2, 16) - 1; // 65535
+  var floatMin = metaData.minPixelValue;
+  var floatMax = metaData.maxPixelValue;
+  var floatRange = floatMax - floatMin;
+  var slope = floatRange === 0 ? 1 : floatRange / intRange;
+  var intercept = floatMin;
+
+  // creates a Uint16Array ndarray to hold the converted pixel data
+  var convertedImageDataView = (0, _ndarray2.default)(new Uint16Array(imageDataView.data.length), imageDataView.shape, imageDataView.stride, imageDataView.offset);
+
+  // converts from float to int, scaling each with a linear linearTransformation
+  for (var l = 0; l < imageDataView.shape[3]; l++) {
+    for (var k = 0; k < imageDataView.shape[2]; k++) {
+      for (var j = 0; j < imageDataView.shape[1]; j++) {
+        for (var i = 0; i < imageDataView.shape[0]; i++) {
+          var value = imageDataView.get(i, j, k, l);
+
+          value = linearTransformation(value, slope, intercept);
+          convertedImageDataView.set(i, j, k, l, Math.floor(value));
+        }
+      }
+    }
   }
 
   return {
-    width: width,
-    height: height,
-    values: selectedVoxels.map(function (v) {
-      return v.value;
-    })
+    convertedImageDataView: convertedImageDataView,
+    floatImageDataView: imageDataView,
+    metaData: {
+      slope: slope,
+      intercept: intercept,
+      minPixelValue: Math.floor(linearTransformation(metaData.minPixelValue, slope, intercept)),
+      maxPixelValue: Math.floor(linearTransformation(metaData.maxPixelValue, slope, intercept)),
+      dataType: {
+        TypedArrayConstructor: Uint16Array,
+        OriginalTypedArrayConstructor: metaData.dataType.TypedArrayConstructor,
+        isDataInFloat: true,
+        isDataInColors: metaData.dataType.isDataInColors
+      }
+    }
   };
+}
+
+/***/ }),
+
+/***/ "./src/createSliceDataAvailablePromises.js":
+/*!*************************************************!*\
+  !*** ./src/createSliceDataAvailablePromises.js ***!
+  \*************************************************/
+/*! no static exports found */
+/***/ (function(module, exports, __webpack_require__) {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", {
+  value: true
+});
+exports.default = createSliceDataAvailablePromises;
+function createSliceDataAvailablePromises(iterator) {
+  var promises = {
+    i: [],
+    j: [],
+    k: []
+  };
+  var dims = iterator.dimensions;
+
+  var _loop = function _loop(k) {
+    promises.k[k] = new Promise(function (resolve) {
+      iterator.on('chunkReceived', function () {
+        if (iterator.currentBufferSize >= (k + 1) * dims[0] * dims[1]) {
+          resolve();
+        }
+      });
+    });
+  };
+
+  for (var k = 0; k < dims[2]; k++) {
+    _loop(k);
+  }
+
+  var promiseForLastKSlice = promises.k[dims[2] - 1];
+
+  for (var j = 0; j < dims[1]; j++) {
+    promises.j[j] = promiseForLastKSlice;
+  }
+  for (var i = 0; i < dims[0]; i++) {
+    promises.i[i] = promiseForLastKSlice;
+  }
+
+  return promises;
 }
 
 /***/ }),
@@ -17487,6 +18037,103 @@ function createDummyImageLoader(imageId, header, imageData, width, height) {
 }
 
 exports.default = createDummyImageLoader;
+
+/***/ }),
+
+/***/ "./src/events.js":
+/*!***********************!*\
+  !*** ./src/events.js ***!
+  \***********************/
+/*! no static exports found */
+/***/ (function(module, exports, __webpack_require__) {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", {
+  value: true
+});
+exports.default = Events;
+function Events() {
+  var _arguments = arguments;
+  var target = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : this;
+
+  var events = {};
+  var empty = [];
+
+  target.on = function (type, func, ctx) {
+    (events[type] = events[type] || []).push([func, ctx]);
+
+    return target;
+  };
+
+  target.off = function (type, func) {
+    if (!type) {
+      events = {};
+    }
+    var list = events[type] || empty;
+    var i = list.length = func ? list.length : 0;
+
+    while (i--) {
+      func == list[i][0] && list.splice(i, 1);
+    }
+
+    return target;
+  };
+
+  target.emit = function (type) {
+    var e = events[type] || empty;
+    var list = e.length > 0 ? e.slice(0, e.length) : e;
+    var i = 0;
+    var j = void 0;
+
+    while (j = list[i++]) {
+      j[0].apply(j[1], empty.slice.call(_arguments, 1));
+    }
+
+    return target;
+  };
+}
+
+/***/ }),
+
+/***/ "./src/flattenNDarray.js":
+/*!*******************************!*\
+  !*** ./src/flattenNDarray.js ***!
+  \*******************************/
+/*! no static exports found */
+/***/ (function(module, exports, __webpack_require__) {
+
+"use strict";
+
+
+Object.defineProperty(exports, "__esModule", {
+  value: true
+});
+exports.default = flattenNDarray;
+/**
+ * flattenNDarray - Returns a 1D version of the provided 2D ndarray. The type
+ * of the returned array is the same as the one provided as the second argument.
+ *
+ * @param  {ndarray} ndarray                The 2D ndarray to be flattened.
+ * @param  {function} TypedArrayConstructor The type with which to construct
+ * the flattened array.
+ * @return {constructor}                    The 1D flattened array.
+ */
+function flattenNDarray(ndarray) {
+  var TypedArrayConstructor = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : Array;
+
+  var result = new TypedArrayConstructor(ndarray.size);
+  var idx = 0;
+
+  for (var j = 0; j < ndarray.shape[1]; ++j) {
+    for (var i = 0; i < ndarray.shape[0]; ++i) {
+      result[idx++] = ndarray.get(i, j);
+    }
+  }
+
+  return result;
+}
 
 /***/ }),
 
@@ -17575,6 +18222,8 @@ var formEl = document.querySelector('form');
 var fileEl = formEl.querySelector('#file');
 var progressEl = formEl.querySelector('#progress');
 
+var matrixIterator = null;
+
 formEl.addEventListener('submit', function (e) {
   e.preventDefault();
 
@@ -17586,7 +18235,6 @@ formEl.addEventListener('submit', function (e) {
   var inflator = new _pako2.default.Inflate();
   var parsedHeader = null;
   var decompressedHeaderRemainderBuffer = null;
-  var matrixIterator = null;
   var remainderBytesFromPreviousChunk = null;
 
   (0, _request2.default)(fileEl.value, reportProgress, chunkReceived, done);
@@ -17617,8 +18265,9 @@ formEl.addEventListener('submit', function (e) {
 
         // parse the header using nifti-reader-js
         parsedHeader = (0, _parseNiftiHeader.parseNiftiHeader)(headerBytes);
+        decompressedHeaderRemainderBuffer = decompressedHeaderRemainderBuffer.slice(parsedHeader.header.vox_offset - HEADER_LENGTH);
         console.dir(parsedHeader);
-        matrixIterator = new _MatrixIterator2.default(parsedHeader.voxelLength);
+        matrixIterator = new _MatrixIterator2.default(parsedHeader.voxelLength, parsedHeader.dataType.TypedArrayConstructor);
 
         totalDecompressedBytesRead += HEADER_LENGTH;
       }
@@ -17636,38 +18285,32 @@ formEl.addEventListener('submit', function (e) {
         } else {
           chunk = inflator.result.buffer;
         }
+      } else if (remainderBytesFromPreviousChunk && remainderBytesFromPreviousChunk.byteLength > 0) {
+        chunk = (0, _growBuffer2.default)(remainderBytesFromPreviousChunk, chunk);
       }
 
       // NEED TO GRAB THE BYTES THAT REMAINDED FROM THIS CHUNK (eg, byte alignment
       // of floats) and prepend them to the next chunk
-      // do whatever has to be done with this new data
-      remainderBytesFromPreviousChunk = (0, _consumeImageData.consumeImageData)(chunk, parsedHeader, matrixIterator);
+      remainderBytesFromPreviousChunk = matrixIterator.addChunk(chunk, parsedHeader);
 
-      // if there is still something let on the chunk, it means that this
-      // NIfTI image uses more than 1 byte per value and there was a remainder
-      // of this chunk, that needs to be prepended to the next
-      // if (chunk.length ) {
-      //
-      // }
+      if (!window.hasPrintedSlice0) {
+        var imageIdObject = _ImageId2.default.fromURL('nifti:' + fileEl.value);
 
-      // just grabs the first axial slice, supposing the initial chunk was
-      // big enough to hold all of its pixels
-      // this is just a temporary, for an initial demo purpose
-      setTimeout(function () {
-        // if (!window.hasPrintedSlice0) {
-        //   const imageIdObject = ImageId.fromURL(`nifti:${fileEl.value}`);
-        //   const { width, height, values } = getSlice(imageIdObject.slice.dimension, parsedHeader, imageIdObject.slice.index);
-        //
-        //   createDummyImageLoader(imageIdObject.url, parsedHeader, values, width, height);
-        //   const element = document.querySelector('#cornerstone-image');
-        //
-        //   cornerstone.enable(element);
-        //   cornerstone.loadImage(imageIdObject.url).then((image) => {
-        //     cornerstone.displayImage(element, image);
-        //   });
-        //   window.hasPrintedSlice0 = true;
-        // }
-      }, 5000);
+        (0, _consumeImageData.getSlice)(imageIdObject.slice.dimension, parsedHeader, imageIdObject.slice.index, matrixIterator).then(function (_ref) {
+          var columns = _ref.columns,
+              rows = _ref.rows,
+              values = _ref.values;
+
+          (0, _dummyImageLoader2.default)(imageIdObject.url, parsedHeader, values, columns, rows);
+          var element = document.querySelector('#cornerstone-image');
+
+          cornerstone.enable(element);
+          cornerstone.loadImage(imageIdObject.url).then(function (image) {
+            cornerstone.displayImage(element, image);
+          });
+        });
+        window.hasPrintedSlice0 = true;
+      }
 
       totalDecompressedBytesRead += chunk.byteLength;
     }
@@ -17677,24 +18320,6 @@ formEl.addEventListener('submit', function (e) {
     inflator.push([], true);
     logger.info('Total of bytes *compressed*: ' + totalBytesRead.toLocaleString());
     logger.info('Total of bytes *decompressed*: ' + totalDecompressedBytesRead.toLocaleString());
-
-    if (!window.hasPrintedSlice0) {
-      var imageIdObject = _ImageId2.default.fromURL('nifti:' + fileEl.value);
-
-      var _getSlice = (0, _consumeImageData.getSlice)(imageIdObject.slice.dimension, parsedHeader, imageIdObject.slice.index),
-          width = _getSlice.width,
-          height = _getSlice.height,
-          values = _getSlice.values;
-
-      (0, _dummyImageLoader2.default)(imageIdObject.url, parsedHeader, values, width, height);
-      var element = document.querySelector('#cornerstone-image');
-
-      cornerstone.enable(element);
-      cornerstone.loadImage(imageIdObject.url).then(function (image) {
-        cornerstone.displayImage(element, image);
-      });
-      window.hasPrintedSlice0 = true;
-    }
   }
 });
 
